@@ -44,47 +44,61 @@ typedef struct command_t {
 } command_t;
 
 float clk_div = 1.0f;
-volatile uint capture_counter = 0;
+volatile uint pulse_counter = 0;
 command_t ir_command = {0};
 
 volatile bool is_captured = false;
+volatile bool is_sent = false;
 volatile edge_type_t edge_type = EDGE_NONE;
-volatile alarm_id_t timeout_alarm_id = 0;
+volatile alarm_id_t timeout_alarm_id = 0, send_command_alarm_id = 0;
 
 static int64_t timeout_callback(alarm_id_t id, void *parameters) {
-    ir_command.count = capture_counter;
+    ir_command.count = pulse_counter;
+    pulse_counter = 0;
     is_captured = true;
     return 0;
 }
 
 static void capture_pin_0_handler(uint counter, edge_type_t edge) {
     if (timeout_alarm_id) cancel_alarm(timeout_alarm_id);
-    if (capture_counter >= MAX_PULSES) {
+    if (pulse_counter >= MAX_PULSES) {
         is_captured = true;
-        ir_command.count = capture_counter;
+        ir_command.count = pulse_counter;
+        pulse_counter = 0;
         return;
     }
     const float tick_seconds = (float)CAPTURE_COUNTER_CYCLES / (float)clock_get_hz(clk_sys);
     static uint counter_prev = 0;
-    ir_command.pulses[capture_counter].cycles = counter - counter_prev;
-    ir_command.pulses[capture_counter].duration = (float)ir_command.pulses[capture_counter].cycles * tick_seconds;
+    ir_command.pulses[pulse_counter].cycles = counter - counter_prev;
+    ir_command.pulses[pulse_counter].duration = (float)ir_command.pulses[pulse_counter].cycles * tick_seconds;
     if (edge == EDGE_RISING) {
-        ir_command.pulses[capture_counter].state = PULSE_LOW;
+        ir_command.pulses[pulse_counter].state = PULSE_LOW;
     } else if (edge == EDGE_FALLING) {
-        ir_command.pulses[capture_counter].state = PULSE_HIGH;
+        ir_command.pulses[pulse_counter].state = PULSE_HIGH;
     }
     counter_prev = counter;
-    capture_counter++;
+    pulse_counter++;
     timeout_alarm_id = add_alarm_in_us(CAPTURE_TIMEOUT_US, timeout_callback, NULL, true);
 }
 
-static void ir_send_command() {
-    for (uint i = 1; i < ir_command.count; i++) {
+static int64_t ir_send_command(alarm_id_t id, void *parameters) {
+    uint count = ir_command.count;
+    for (uint i = 1; i < count; i++) {
         bool carrier = ir_command.pulses[i].state == PULSE_LOW;
         uint32_t periods =
             (uint32_t)(ir_command.pulses[i].duration * (float)clock_get_hz(clk_sys) / (float)IR_SEND_COUNTER_CYCLES);
+        printf("\n%d: %d %d", i, carrier, periods);
         // ir_send_push(carrier, periods);
     }
+    for (uint i = 1; i < count; i++) {
+        ir_command.pulses[i].cycles = 0;
+        ir_command.pulses[i].duration = 0.0f;
+        ir_command.pulses[i].state = PULSE_LOW;
+    }
+    ir_command.count = 0;
+    // printf("\nCommand sent with %d pulses", ir_command.count);*/
+    is_sent = true;
+    return 0;
 }
 
 int main() {
@@ -104,16 +118,13 @@ int main() {
     while (true) {
         if (is_captured) {
             is_captured = false;
-            sleep_ms(500);
-            ir_send_command();
-            printf("\nPulses %d", capture_counter - 1);
-            for (uint i = 1; i < capture_counter; i++) {
-                ir_command.pulses[i].cycles = 0;
-                ir_command.pulses[i].duration = 0.0f;
-                ir_command.pulses[i].state = PULSE_LOW;
-            }
-            capture_counter = 0;
+            printf("\nPulses %d", ir_command.count - 1);
+            add_alarm_in_us(500000, ir_send_command, NULL, true);
         }
-        sleep_ms(100);
+        if (is_sent) {
+            is_sent = false;
+            printf("\nCommand sent successfully");
+        }
+        sleep_ms(1000);
     }
 }
