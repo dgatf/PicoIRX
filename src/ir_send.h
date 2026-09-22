@@ -18,8 +18,8 @@ extern "C" {
 #include "ir_send.pio.h"
 #include "hardware/pio.h"
 
-void ir_send_init(PIO pio, uint pin, float clk_div, uint irq);
-//void ir_send_set_handler(uint pin, ir_send_handler_t handler);
+void ir_send_init(PIO pio, uint pin, float clk_div);
+void ir_send_push(bool carrier, uint32_t count);
 void ir_send_remove(void);
 
 #ifdef __cplusplus

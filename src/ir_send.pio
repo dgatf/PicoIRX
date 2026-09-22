@@ -10,11 +10,25 @@
 
 .define PUBLIC IR_SEND_IRQ_NUM 1     // use 0 to 3
 
-.define PUBLIC IR_SEND_COUNTER_CYCLES 3
+.define PUBLIC IR_SEND_COUNTER_CYCLES 28
 
-.program ir_send  
-    pull
-loop:
-    set pins, 1
-    set pins, 0
-    jmp loop
+.program ir_send
+
+.wrap_target
+    pull block
+    out y, 1
+    out x, 31
+
+period:
+    jmp !y silent
+
+mark:
+    set pins, 1 [12]
+    set pins, 0 [12]
+    jmp x-- period
+
+silent:
+    set pins, 0 [12]
+    nop         [12]
+    jmp x-- period
+.wrap

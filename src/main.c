@@ -23,11 +23,12 @@
 #include <stdio.h>
 
 #include "capture_edge.h"
-#include "ir_send.h"
 #include "hardware/clocks.h"
+#include "ir_send.h"
 #include "pico/stdlib.h"
 
 #define MAX_PULSES 200
+#define CAPTURE_TIMEOUT_US 100000L
 
 typedef enum pulse_state_t { PULSE_LOW, PULSE_HIGH } pulse_state_t;
 
@@ -37,37 +38,52 @@ typedef struct pulse_t {
     volatile float duration;
 } pulse_t;
 
+typedef struct command_t {
+    uint count;
+    pulse_t pulses[MAX_PULSES];
+} command_t;
+
 float clk_div = 1.0f;
 volatile uint capture_counter = 0;
-pulse_t ir_command[MAX_PULSES] = {0};
+command_t ir_command = {0};
+
 volatile bool is_captured = false;
 volatile edge_type_t edge_type = EDGE_NONE;
 volatile alarm_id_t timeout_alarm_id = 0;
 
 static int64_t timeout_callback(alarm_id_t id, void *parameters) {
+    ir_command.count = capture_counter;
     is_captured = true;
     return 0;
 }
 
 static void capture_pin_0_handler(uint counter, edge_type_t edge) {
     if (timeout_alarm_id) cancel_alarm(timeout_alarm_id);
+    if (capture_counter >= MAX_PULSES) {
+        is_captured = true;
+        ir_command.count = capture_counter;
+        return;
+    }
     const float tick_seconds = (float)CAPTURE_COUNTER_CYCLES / (float)clock_get_hz(clk_sys);
     static uint counter_prev = 0;
-    ir_command[capture_counter].cycles = counter - counter_prev;
-    ir_command[capture_counter].duration = (float)ir_command[capture_counter].cycles * tick_seconds;
+    ir_command.pulses[capture_counter].cycles = counter - counter_prev;
+    ir_command.pulses[capture_counter].duration = (float)ir_command.pulses[capture_counter].cycles * tick_seconds;
     if (edge == EDGE_RISING) {
-        ir_command[capture_counter].state = PULSE_LOW;
+        ir_command.pulses[capture_counter].state = PULSE_LOW;
     } else if (edge == EDGE_FALLING) {
-        ir_command[capture_counter].state = PULSE_HIGH;
+        ir_command.pulses[capture_counter].state = PULSE_HIGH;
     }
     counter_prev = counter;
-    if (capture_counter < MAX_PULSES) capture_counter++;
-    timeout_alarm_id = add_alarm_in_us(1000000L, timeout_callback, NULL, true);
+    capture_counter++;
+    timeout_alarm_id = add_alarm_in_us(CAPTURE_TIMEOUT_US, timeout_callback, NULL, true);
 }
 
-static void ir_send() {
-    for (uint i = 1; i < capture_counter; i++) {
-        pio_sm_put_blocking(pio0, 0, ir_command[i].cycles);
+static void ir_send_command() {
+    for (uint i = 1; i < ir_command.count; i++) {
+        bool carrier = ir_command.pulses[i].state == PULSE_LOW;
+        uint32_t periods =
+            (uint32_t)(ir_command.pulses[i].duration * (float)clock_get_hz(clk_sys) / (float)IR_SEND_COUNTER_CYCLES);
+        // ir_send_push(carrier, periods);
     }
 }
 
@@ -83,21 +99,21 @@ int main() {
     capture_edge_init(pio, pin_rx, pin_rx_count, clk_div, irq);
     capture_edge_set_handler(0, capture_pin_0_handler);
 
-    ir_send_init(pio, pin_tx, clk_div, 1);
+    ir_send_init(pio, pin_tx, clk_div);
 
     while (true) {
         if (is_captured) {
             is_captured = false;
-            //ir_send();
-            printf("\nPulses: %d", capture_counter - 1);
+            sleep_ms(500);
+            ir_send_command();
+            printf("\nPulses %d", capture_counter - 1);
             for (uint i = 1; i < capture_counter; i++) {
-                printf("\n%d st=%d c=%d ms=%.03f", i, ir_command[i].state, ir_command[i].cycles, ir_command[i].duration * 1000);
-                ir_command[i].cycles = 0;
-                ir_command[i].duration = 0.0f;
-                ir_command[i].state = PULSE_LOW;
+                ir_command.pulses[i].cycles = 0;
+                ir_command.pulses[i].duration = 0.0f;
+                ir_command.pulses[i].state = PULSE_LOW;
             }
             capture_counter = 0;
         }
-        sleep_ms(1000);
+        sleep_ms(100);
     }
 }
