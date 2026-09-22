@@ -39,8 +39,8 @@ typedef struct pulse_t {
 } pulse_t;
 
 typedef struct command_t {
-    uint count;
-    pulse_t pulses[MAX_PULSES];
+    volatile uint count;
+    volatile pulse_t pulses[MAX_PULSES];
 } command_t;
 
 float clk_div = 1.0f;
