@@ -14,7 +14,6 @@
 
 .program ir_send
 
-.wrap_target
     pull block
     out y, 1
     out x, 31
@@ -26,9 +25,10 @@ mark:
     set pins, 1 [12]
     set pins, 0 [12]
     jmp x-- period
+    jmp 0
 
 silent:
     set pins, 0 [12]
     nop         [12]
     jmp x-- period
-.wrap
+    jmp 0

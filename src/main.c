@@ -24,6 +24,9 @@
 
 #include "capture_edge.h"
 #include "hardware/clocks.h"
+#include "hardware/regs/busctrl.h"
+#include "hardware/structs/bus_ctrl.h"
+#include "hardware/sync.h"
 #include "ir_send.h"
 #include "pico/stdlib.h"
 
@@ -49,6 +52,7 @@ command_t ir_command = {0};
 
 volatile bool is_captured = false;
 volatile bool is_sent = false;
+volatile bool send_pending = false;
 volatile edge_type_t edge_type = EDGE_NONE;
 volatile alarm_id_t timeout_alarm_id = 0, send_command_alarm_id = 0;
 
@@ -60,7 +64,7 @@ static int64_t timeout_callback(alarm_id_t id, void *parameters) {
 }
 
 static void capture_pin_0_handler(uint counter, edge_type_t edge) {
-    if (timeout_alarm_id) cancel_alarm(timeout_alarm_id);
+    if (timeout_alarm_id > 0) cancel_alarm(timeout_alarm_id);
     if (pulse_counter >= MAX_PULSES) {
         is_captured = true;
         ir_command.count = pulse_counter;
@@ -82,26 +86,13 @@ static void capture_pin_0_handler(uint counter, edge_type_t edge) {
 }
 
 static int64_t ir_send_command(alarm_id_t id, void *parameters) {
-    uint count = ir_command.count;
-    for (uint i = 1; i < count; i++) {
-        bool carrier = ir_command.pulses[i].state == PULSE_LOW;
-        uint32_t periods =
-            (uint32_t)(ir_command.pulses[i].duration * (float)clock_get_hz(clk_sys) / (float)IR_SEND_COUNTER_CYCLES);
-        printf("\n%d: %d %d", i, carrier, periods);
-        // ir_send_push(carrier, periods);
-    }
-    for (uint i = 1; i < count; i++) {
-        ir_command.pulses[i].cycles = 0;
-        ir_command.pulses[i].duration = 0.0f;
-        ir_command.pulses[i].state = PULSE_LOW;
-    }
-    ir_command.count = 0;
-    // printf("\nCommand sent with %d pulses", ir_command.count);*/
-    is_sent = true;
+    send_pending = true;
     return 0;
 }
 
 int main() {
+    //busctrl_hw->priority = BUSCTRL_BUS_PRIORITY_DMA_R_BITS | BUSCTRL_BUS_PRIORITY_DMA_W_BITS;
+
     PIO pio = pio0;
     uint pin_rx = 0;
     uint pin_tx = 1;
@@ -109,8 +100,7 @@ int main() {
     uint irq = PIO0_IRQ_0;
 
     stdio_init_all();
-
-    capture_edge_init(pio, pin_rx, pin_rx_count, clk_div, irq);
+    capture_edge_init(pio, pin_rx, clk_div, irq);
     capture_edge_set_handler(0, capture_pin_0_handler);
 
     ir_send_init(pio, pin_tx, clk_div);
@@ -121,10 +111,27 @@ int main() {
             printf("\nPulses %d", ir_command.count - 1);
             add_alarm_in_us(500000, ir_send_command, NULL, true);
         }
-        if (is_sent) {
-            is_sent = false;
-            printf("\nCommand sent successfully");
+        if (send_pending) {
+            while (1) {
+                uint count = ir_command.count;
+                for (uint i = 1; i < count; i++) {
+                    bool carrier = ir_command.pulses[i].state == PULSE_LOW;
+                    uint32_t periods = (uint32_t)(ir_command.pulses[i].duration * (float)clock_get_hz(clk_sys) /
+                                                  (float)IR_SEND_COUNTER_CYCLES);
+                    //printf("\n%d: %d %.03f", i, carrier, ir_command.pulses[i].duration * 1000);
+                    ir_send_push(carrier, periods);
+                    //sleep_ms(100);
+                }
+                printf("\nCommand sent with %d pulses", count - 1);
+                //for (uint i = 1; i < count; i++) {
+                //    ir_command.pulses[i].cycles = 0;
+                //    ir_command.pulses[i].duration = 0.0f;
+                //    ir_command.pulses[i].state = PULSE_LOW;
+                //}
+                //ir_command.count = 0;
+                send_pending = false;
+                sleep_ms(1000);
+            }
         }
-        sleep_ms(1000);
     }
 }
